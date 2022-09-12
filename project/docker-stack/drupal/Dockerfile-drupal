@@ -1,0 +1,28 @@
+FROM php:7.4-apache
+COPY --from=composer /usr/bin/composer /usr/bin/composer
+
+RUN apt -y update
+RUN apt -y install wget
+RUN DEBIAN_FRONTEND=noninteractive apt -y install iputils-ping net-tools wait-for-it zip unzip
+RUN DEBIAN_FRONTEND=noninteractive apt -y install libxml2-dev apt-utils libzip-dev
+RUN DEBIAN_FRONTEND=noninteractive apt -y install libfreetype6-dev libjpeg62-turbo-dev libpng-dev
+RUN docker-php-ext-configure gd --with-freetype=/usr/include/ --with-jpeg=/usr/include/
+RUN docker-php-ext-install -j$(nproc) gd pdo pdo_mysql
+RUN a2enmod rewrite
+
+RUN cd /usr/local/etc/php/conf.d/ && \
+  echo 'memory_limit = -1' >> /usr/local/etc/php/conf.d/docker-php-ram-limit.ini
+
+RUN wget -O drush.phar https://github.com/drush-ops/drush-launcher/releases/latest/download/drush.phar
+RUN chmod +x drush.phar
+RUN mv drush.phar /usr/local/bin/drush
+
+WORKDIR /var/www/html
+RUN composer create-project drupal/recommended-project /var/www/html
+RUN composer require drush/drush
+ 
+RUN docker-php-ext-install mysqli
+ADD entrypoint.sh /usr/local/bin/
+RUN chmod a+x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT /usr/local/bin/entrypoint.sh

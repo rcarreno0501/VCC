@@ -1,0 +1,162 @@
+
+- hosts: all
+  # change /etc/sudoers: %sudo   ALL=(ALL:ALL) NOPASSWD: ALL
+  become: yes
+  vars:
+    hostnames: 
+      VM1: VM1.localdomain
+      VM2: VM2.localdomain
+      VM3: VM3.localdomain
+    pci_devices:
+      management: ens33
+      external: ens37
+      storage: ens38
+    management_addresses:
+      VM1: 192.168.255.11
+      VM2: 192.168.255.12
+      VM3: 192.168.255.13
+    external_addresses:
+      VM1: 192.168.198.11
+      VM2: 192.168.198.12
+      VM3: 192.168.198.13
+    storage_addresses:
+      VM1: 10.255.255.11
+      VM2: 10.255.255.12
+      VM3: 10.255.255.13
+    netmasks:
+      management: 24
+      external: 24
+      storage: 24
+    gateway: 192.168.198.2
+    # Variables to Enable GlusterFs
+    gluster_block_device: /dev/sdb
+    glusterfs_directories:
+      VM1: /data
+      VM2: /data
+      VM3: /data
+    glusterfs_replicated_volume: gfs
+    master_vm: VM1
+    glusterfs_block_device: VM1S:gfs
+    glusterfs_bricks: /data/brick
+    # Variables to init Swarm
+    advertise_addr: ens33
+    remote_addrs: [VM1M] 
+  # Configuring IP addresses, hostnames and hosts
+  tasks:
+  - name: Fix hostnames
+    hostname:
+      name: "{{ hostnames[ansible_facts['hostname']] }}"
+    when: ansible_facts['hostname'] in hostnames
+  - name: Modify /etc/hosts file
+    template:
+      src: hosts.j2
+      dest: /etc/hosts
+  - name: Template netplan config
+    template:
+      src: final_layout.j2
+      dest: /etc/netplan/00-installer-config.yaml
+  - name: Apply netplan config
+    shell:
+      cmd: netplan apply
+  # Configuring GlusterFs volume
+  - name: Install required packages to enable GlusterFs
+    apt:
+      name: ['glusterfs-server', 'glusterfs-client'] 
+      state: present
+  - name: Start the server service
+    shell: 
+      cmd: systemctl start glusterd.service; systemctl enable; glusterd.service; systemctl status glusterd.service
+  - name: Create a trusted storage pool
+    gluster.gluster.gluster_peer:
+      state: present
+      nodes: "{{ storage_addresses | dict2items | map(attribute='value') | reject('equalto',storage_addresses[master_vm]) }}"
+    when: ansible_facts['hostname'] == master_vm        
+  - name: Check the peer status
+    command: gluster peer status 
+  - name: Unmount Glusterfs device if it is mounted
+    ansible.posix.mount:
+      path: "{{ item.mount }}"
+      state: absent
+    when: item.mount != glusterfs_directories[ansible_facts['hostname']] and item.device == gluster_block_device
+    loop: "{{ ansible_facts.mounts }}"
+  - name: Add a file system type (ext4)
+    community.general.filesystem:
+      fstype: ext4
+      dev: "{{ gluster_block_device }}"
+  - name: Mount Filesystems
+    ansible.posix.mount:
+      path: "{{ glusterfs_directories[ansible_facts['hostname']] }}"
+      src: "{{ gluster_block_device }}"
+      fstype: ext4
+      state: mounted 
+  - name: Create and start gluster volume
+    gluster.gluster.gluster_volume:
+      state: present
+      name: "{{ glusterfs_replicated_volume }}"
+      bricks: "{{ glusterfs_bricks }}" 
+      replicas: 3
+      cluster: "{{ storage_addresses | dict2items | map(attribute='value') }}"
+      options:
+        { auth.allow: '{{ storage_addresses | dict2items | map(attribute="value") | string | replace("[","") | replace("]","") | replace("''","") }}',
+          nfs.disable: 'on'
+        }
+      force: yes 
+    run_once: true
+  - name: Mount Glusterfs Volume
+    ansible.posix.mount:
+      path: "/{{ glusterfs_replicated_volume }}"
+      src: "{{ glusterfs_block_device }}"
+      fstype: glusterfs
+      state: mounted
+      opts: defaults,_netdev,backupvolfile-server=localhost
+  # Installing swarm
+  - name: Add an Apt signing key using the key at the docker url 
+    ansible.builtin.apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+  - name: Add docker repository
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_facts['lsb']['codename'] }} stable"
+      state: present
+  - name: Install required packages to init Swarm
+    apt:
+      name: ['docker-ce', 'docker-ce-cli', 'containerd.io', 'pip', 'virtualenv'] 
+      state: present
+  - name: Install setuptools python package
+    ansible.builtin.pip:
+      name: setuptools
+  - name: Install docker python package
+    ansible.builtin.pip:
+      name: docker
+  - name: Add user to docker group
+    ansible.builtin.user:
+      name: "{{ ansible_facts['env']['SUDO_USER'] }}"
+      groups: docker
+      append: yes
+  - name: restart docker
+    ansible.builtin.service: 
+      name=docker
+      state=restarted
+  - name: Init master node as a manager
+    community.docker.docker_swarm:
+      state: present
+      advertise_addr: "{{ advertise_addr }}"
+    when: ansible_facts['hostname'] == master_vm
+    register: swarm_result
+  - name: Copy Worker Token into a file on Storage Gluster Pool
+    shell: 
+      cmd: "echo {{ swarm_result['swarm_facts']['JoinTokens']['Worker'] }} > /{{ glusterfs_replicated_volume }}/token.txt"
+    when: ansible_facts['hostname'] == master_vm
+  - name: Copy Worker Token from file to variable 
+    shell: 
+      cmd: "cat /{{ glusterfs_replicated_volume }}/token.txt"
+    register: token
+#  - debug:
+#      msg: "{{ token.stdout }}"
+  - name: Add nodes
+    community.docker.docker_swarm:
+      state: join
+      advertise_addr: "{{ advertise_addr }}"
+      join_token: "{{ token.stdout }}"
+      remote_addrs: "{{ remote_addrs }}"
+    when: ansible_facts['hostname'] != master_vm

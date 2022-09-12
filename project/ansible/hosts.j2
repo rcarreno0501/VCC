@@ -1,0 +1,22 @@
+127.0.0.1 localhost
+127.0.1.1 {{ hostnames[ansible_facts['hostname']] }}
+8.8.8.8 googledns
+
+# The following lines are desirable for IPv6 capable hosts
+::1     ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+
+{{ management_addresses['VM1'] }} VM1M
+{{ management_addresses['VM2'] }} VM2M
+{{ management_addresses['VM3'] }} VM3M
+
+{{ external_addresses['VM1'] }} VM1E
+{{ external_addresses['VM2'] }} VM2E
+{{ external_addresses['VM3'] }} VM3E
+
+{{ storage_addresses['VM1'] }} VM1S
+{{ storage_addresses['VM2'] }} VM2S
+{{ storage_addresses['VM3'] }} VM3S

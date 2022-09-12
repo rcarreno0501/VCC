@@ -1,0 +1,17 @@
+# This is the network config written by 'subiquity'
+network:
+  version: 2
+  ethernets:
+    {{ pci_devices['management'] }}:
+      addresses:
+        - {{ management_addresses[ansible_facts['hostname']] }}/{{ netmasks['management'] }}
+    {{ pci_devices['external'] }}:
+      addresses:
+        - {{ external_addresses[ansible_facts['hostname']] }}/{{ netmasks['external'] }}
+      gateway4: {{ gateway }}
+      nameservers:
+          search: [unige.it]
+          addresses: [8.8.8.8, 8.8.4.4]
+    {{ pci_devices['storage'] }}:
+      addresses:
+        - {{ storage_addresses[ansible_facts['hostname']] }}/{{ netmasks['storage'] }}

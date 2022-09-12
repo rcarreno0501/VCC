@@ -1,0 +1,62 @@
+version: '3'
+
+services:
+  db:
+    image: mariadb
+    hostname: db
+    environment:
+      # cf. https://hub.docker.com/_/mariadb
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: drupal
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: drupal123
+    networks:
+      - intnet
+
+  pmy:
+    image: phpmyadmin
+    hostname: pmy
+    depends_on:
+      - db
+    environment:
+      PMA_ABSOLUTE_URI: http://192.168.200.2/phpmyadmin/
+    networks:
+      intnet:
+  
+  cms:
+    build: 
+      context: ./
+      dockerfile: Dockerfile-drupal
+    image: drupal
+    hostname: cms
+    entrypoint: 
+      ["wait-for-it", "-t", "120", "db:3306", "--", "/usr/local/bin/entrypoint.sh"]
+    environment:
+      DB_HOST: db
+      DB_NAME: drupal
+      DB_USER: drupal
+      DB_PASSWORD: drupal123
+      DRUPAL_ADMIN_PASS: admin
+    depends_on:
+      - db
+    volumes:
+      - /gfs/cms-config:/config
+    ports:
+      - "8080:80"
+    networks:
+      - extnet
+      - intnet
+      
+networks:
+  intnet:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.200.0/24
+  extnet:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.100.0/24
